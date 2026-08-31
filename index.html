@@ -23,17 +23,28 @@ border-radius:9px;padding:10px 12px;font-weight:700;margin-bottom:10px;font-size
 .tile .l i{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
 .tile.ok .l i{background:var(--green)}.tile.warn .l i{background:var(--amber)}.tile.bad .l i{background:var(--red)}
 .tile .v{font-size:1.05rem;font-weight:700;margin-top:3px}
+.tile .v.pos{color:var(--green)}.tile .v.neg{color:var(--red)}
 .tile .s{font-size:.66rem;color:var(--dim);margin-top:2px;word-break:break-word}
-.sect{font-size:.68rem;letter-spacing:.08em;color:var(--faint);margin:14px 0 6px;text-transform:uppercase}
+.sect{font-size:.68rem;letter-spacing:.08em;color:var(--faint);margin:14px 0 6px;text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.periods{display:flex;gap:4px;margin-left:auto}
+.periods button{font:inherit;font-size:.68rem;cursor:pointer;background:var(--panel2);color:var(--dim);
+border:1px solid var(--line);border-radius:6px;padding:3px 9px;text-transform:none;letter-spacing:0}
+.periods button.on{background:#101c2c;color:var(--blue);border-color:#1e3a5c}
+#pnlchart{width:100%;background:var(--panel);border:1px solid var(--line);border-radius:9px;margin-bottom:8px}
 table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:9px;overflow:hidden;font-size:.76rem}
 th{font-size:.62rem;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
 td{padding:6px 8px;border-bottom:1px solid #141c27;vertical-align:top}
 tr:last-child td{border-bottom:none}
 td.r,th.r{text-align:right}
+td.pos{color:var(--green)}td.neg{color:var(--red)}
 .pick{font-weight:700}.match{color:var(--faint);font-size:.68rem}
 .bk{font-size:.6rem;padding:1px 5px;border-radius:4px;background:#16202c;color:var(--blue);border:1px solid #223247;white-space:nowrap}
 .ms{font-size:.62rem;padding:1px 5px;border-radius:4px;background:var(--green-bg);color:var(--green);border:1px solid var(--green-line);white-space:nowrap}
 .ms.slow{background:var(--amber-bg);color:var(--amber);border-color:var(--amber-line)}
+.res{font-size:.62rem;padding:1px 6px;border-radius:4px;white-space:nowrap;font-weight:700}
+.res.w{background:var(--green-bg);color:var(--green);border:1px solid var(--green-line)}
+.res.l{background:var(--red-bg);color:var(--red);border:1px solid var(--red-line)}
+.res.o{background:var(--panel2);color:var(--faint);border:1px solid var(--line)}
 .tot{font-size:.72rem;color:var(--dim);margin:6px 2px}
 .tot b{color:var(--txt)}
 .empty{color:var(--faint);font-size:.76rem;padding:14px;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:9px}
@@ -44,25 +55,41 @@ td.r,th.r{text-align:right}
 <div class="sub" id="upd">loading…</div>
 <div id="alert"></div>
 <div class="tiles" id="tiles"></div>
-<div class="sect">today</div><div class="tot" id="today-tot"></div><div id="today"></div>
-<div class="sect">last 7 days</div><div id="week"></div>
+
+<div class="sect">p&amp;l — extension bets
+  <span class="periods" id="periods">
+    <button data-p="day">today</button><button data-p="week" class="on">7d</button>
+    <button data-p="month">30d</button><button data-p="all">all</button>
+  </span>
+</div>
+<div class="tiles" id="pnlstats"></div>
+<svg id="pnlchart" viewBox="0 0 720 190" preserveAspectRatio="none" height="190"></svg>
+
+<div class="sect">bets<span class="periods" style="visibility:hidden"><button>.</button></span></div>
+<div class="tot" id="today-tot"></div><div id="today"></div>
+<div class="sect">by day</div><div id="week"></div>
 <script>
 const TZ="Australia/Sydney";
-// Viewer shell only — all data (and its access control) lives behind this
-// key-protected API. The ?key=... from the page URL is passed through.
 const API="https://ppqaxxvnnarzbqubopcf.supabase.co/functions/v1/desk";
 const $=q=>document.querySelector(q);
 const esc=s=>String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
 const f2=o=>o==null?"–":(+o).toFixed(2);
+const money=v=>(v<0?"−$":"$")+Math.abs(v).toFixed(2);
 const hm=iso=>new Date(iso).toLocaleTimeString("en-AU",{timeZone:TZ,hour:"numeric",minute:"2-digit",hour12:true}).replace(/\s*([AP])\.?M\.?/i,(m,g)=>" "+g.toLowerCase()+"m");
 const dayKey=iso=>new Date(iso).toLocaleDateString("en-CA",{timeZone:TZ});
 const ago=s=>{if(s==null)return"never";if(s<90)return Math.round(s)+"s ago";if(s<5400)return Math.round(s/60)+"m ago";if(s<172800)return(s/3600).toFixed(1)+"h ago";return Math.round(s/86400)+"d ago"};
-function tile(cls,l,v,s){return '<div class="tile '+cls+'"><div class="l"><i></i>'+l+'</div><div class="v num">'+v+'</div><div class="s">'+s+'</div></div>'}
+function tile(cls,l,v,s,vc){return '<div class="tile '+cls+'"><div class="l"><i></i>'+l+'</div><div class="v num '+(vc||"")+'">'+v+'</div><div class="s">'+s+'</div></div>'}
+let DATA=null, PERIOD="week";
+document.addEventListener("click",e=>{const b=e.target.closest(".periods button[data-p]");if(!b)return;
+  PERIOD=b.dataset.p;document.querySelectorAll(".periods button[data-p]").forEach(x=>x.classList.toggle("on",x===b));
+  if(DATA)renderPnl(DATA);});
+
 async function load(){
   let d;
   try{const r=await fetch(API+"?api=1&key="+new URLSearchParams(location.search).get("key"),{cache:"no-store"});d=await r.json();}
   catch(e){$("#upd").textContent="cloud unreachable — retrying…";return}
   if(!d.ok){$("#upd").textContent="error: "+(d.error||"bad key?");return}
+  DATA=d;
   const now=new Date(d.now).getTime();
   $("#clock").textContent=new Date().toLocaleTimeString("en-AU",{timeZone:TZ,hour:"numeric",minute:"2-digit",hour12:true})+" Sydney";
   const st={};(d.status||[]).forEach(r=>st[r.component]=r);
@@ -88,33 +115,92 @@ async function load(){
   }
   Object.keys(st).filter(k=>k.startsWith("ext:")).sort().forEach(k=>{
     const a=st[k],p=a.payload||{},name=k.slice(4);
-    const selfAge=p.seen_at?(now/1e3-p.seen_at):null;   // the extension's own last report
-    const aAge=(now-new Date(a.seen_at).getTime())/1e3; // when the desk last relayed it
+    const selfAge=p.seen_at?(now/1e3-p.seen_at):null;
+    const aAge=(now-new Date(a.seen_at).getTime())/1e3;
     const age=selfAge!=null?Math.max(selfAge,0):aAge;
     const fresh=age<300;
     const q=(p.queue||{}).n||0,dy=p.daily||{};
-    t.push(tile(fresh?"ok":"warn","ext · "+esc(name),fresh?"ON":ago(age),
+    const auto=p.autoSubmit?" · AutoTT ON":"";
+    t.push(tile(fresh?(p.autoSubmit?"warn":"ok"):"warn","ext · "+esc(name),(fresh?"ON":ago(age))+auto,
       "queue "+q+" · today "+(dy.bets||0)+" bets $"+(dy.stake||0)+(fresh?"":" · Chrome likely closed")));
   });
   $("#tiles").innerHTML=t.join("");
+  renderPnl(d);
+  renderTables(d);
+  $("#upd").textContent="updated "+hm(d.now)+" · auto-refreshes every 60s · times Sydney";
+}
+
+function periodStart(p,nowIso){
+  if(p==="all")return 0;
+  const now=new Date(nowIso);
+  if(p==="day"){const k=dayKey(nowIso);return new Date(k+"T00:00:00+10:00").getTime()}
+  const days=p==="week"?7:30;
+  return now.getTime()-days*864e5;
+}
+function renderPnl(d){
+  const from=periodStart(PERIOD,d.now);
+  const rows=(d.placements||[]).filter(r=>new Date(r.at).getTime()>=from);
+  const settled=rows.filter(r=>r.result==="won"||r.result==="lost").sort((a,b)=>new Date(a.at)-new Date(b.at));
+  const open=rows.filter(r=>!r.result);
+  const staked=settled.reduce((s,r)=>s+(+r.stake||0),0);
+  const pnl=settled.reduce((s,r)=>s+(+r.pnl||0),0);
+  const wins=settled.filter(r=>r.result==="won").length;
+  const roi=staked?pnl/staked:null;
+  const openStake=open.reduce((s,r)=>s+(+r.stake||0),0);
+  const sgn=v=>v>0?"pos":v<0?"neg":"";
+  $("#pnlstats").innerHTML=[
+    tile(roi==null?"":roi>=0?"ok":"bad","ROI on turnover",roi==null?"–":((roi>=0?"+":"")+(100*roi).toFixed(1)+"%"),"$"+staked.toFixed(2)+" staked",sgn(roi)),
+    tile(pnl>0?"ok":pnl<0?"bad":"","P&L",settled.length?money(pnl):"–",settled.length+" settled · "+wins+"W "+(settled.length-wins)+"L",sgn(pnl)),
+    tile("","open",open.length?open.length+" bet"+(open.length===1?"":"s"):"none","$"+openStake.toFixed(2)+" at risk"),
+    tile("","avg price",settled.length?(settled.reduce((s,r)=>s+(+r.price||0),0)/settled.length).toFixed(2):"–","settled bets"),
+  ].join("");
+  // cumulative P&L line
+  const svg=$("#pnlchart");
+  if(!settled.length){svg.innerHTML='<text x="360" y="100" text-anchor="middle" fill="#5c6979" font-size="13">no settled bets in this period yet</text>';return}
+  const pts=[[0,0]];let cum=0;
+  settled.forEach((r,i)=>{cum+=(+r.pnl||0);pts.push([i+1,cum])});
+  const W=720,H=190,P=28;
+  const ys=pts.map(p=>p[1]);let lo=Math.min(0,...ys),hi=Math.max(0,...ys);
+  if(hi-lo<1e-9){hi=lo+1}
+  const X=i=>P+ (W-2*P)*(i/(pts.length-1||1));
+  const Y=v=>H-P-(H-2*P)*((v-lo)/(hi-lo));
+  const path=pts.map((p,i)=>(i?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");
+  const zero=Y(0);
+  const last=pts[pts.length-1][1];
+  svg.innerHTML=
+    '<line x1="'+P+'" y1="'+zero+'" x2="'+(W-P)+'" y2="'+zero+'" stroke="#233042" stroke-dasharray="4 4"/>'+
+    '<path d="'+path+' L'+X(pts.length-1)+' '+zero+' L'+X(0)+' '+zero+' Z" fill="'+(last>=0?"#0e2719":"#2a1212")+'" opacity="0.55"/>'+
+    '<path d="'+path+'" fill="none" stroke="'+(last>=0?"#31d47d":"#ff6262")+'" stroke-width="2"/>'+
+    '<text x="'+(W-P)+'" y="'+(Y(last)-8)+'" text-anchor="end" fill="'+(last>=0?"#31d47d":"#ff6262")+'" font-size="13" font-weight="700">'+money(last)+'</text>'+
+    '<text x="'+P+'" y="'+(H-8)+'" fill="#5c6979" font-size="10">'+settled.length+' settled bets, oldest → newest</text>';
+}
+function renderTables(d){
   const rows=d.placements||[];const tk=dayKey(d.now);
   const today=rows.filter(r=>dayKey(r.at)===tk);
   const stake=today.reduce((s,r)=>s+(+r.stake||0),0);
-  $("#today-tot").innerHTML=today.length?("<b>"+today.length+"</b> bet"+(today.length==1?"":"s")+" · <b>$"+stake.toFixed(2)+"</b> staked"):"";
+  $("#today-tot").innerHTML=today.length?("today: <b>"+today.length+"</b> bet"+(today.length==1?"":"s")+" · <b>$"+stake.toFixed(2)+"</b> staked"):"";
   $("#today").innerHTML=today.length?table(today):'<div class="empty">No bets placed today yet.</div>';
-  const byDay={};rows.forEach(r=>{const k=dayKey(r.at);(byDay[k]=byDay[k]||{n:0,s:0,slow:0}).n++;byDay[k].s+=(+r.stake||0);if(r.slow)byDay[k].slow++;});
-  const days=Object.keys(byDay).sort().reverse();
-  $("#week").innerHTML=days.length?('<table><tr><th>day</th><th class="r">bets</th><th class="r">staked</th><th class="r">→ trader</th></tr>'+
-    days.map(k=>'<tr><td class="num">'+k+'</td><td class="num r">'+byDay[k].n+'</td><td class="num r">$'+byDay[k].s.toFixed(2)+'</td><td class="num r">'+(byDay[k].slow||"–")+'</td></tr>').join("")+'</table>'):'<div class="empty">Nothing in the last 7 days.</div>';
-  $("#upd").textContent="updated "+hm(d.now)+" · auto-refreshes every 60s · times Sydney";
+  const byDay={};rows.forEach(r=>{const k=dayKey(r.at);const o=(byDay[k]=byDay[k]||{n:0,s:0,pnl:0,settled:0,slow:0});
+    o.n++;o.s+=(+r.stake||0);if(r.slow)o.slow++;
+    if(r.result==="won"||r.result==="lost"){o.settled++;o.pnl+=(+r.pnl||0)}});
+  const days=Object.keys(byDay).sort().reverse().slice(0,30);
+  $("#week").innerHTML=days.length?('<table><tr><th>day</th><th class="r">bets</th><th class="r">staked</th><th class="r">p&amp;l</th><th class="r">roi</th><th class="r">→ trader</th></tr>'+
+    days.map(k=>{const o=byDay[k];const roi=o.settled&&o.s?o.pnl/o.s:null;
+      return '<tr><td class="num">'+k+'</td><td class="num r">'+o.n+'</td><td class="num r">$'+o.s.toFixed(2)+'</td>'+
+      '<td class="num r '+(o.pnl>0?"pos":o.pnl<0?"neg":"")+'">'+(o.settled?money(o.pnl):"–")+'</td>'+
+      '<td class="num r '+(roi>0?"pos":roi<0?"neg":"")+'">'+(roi==null?"–":((roi>=0?"+":"")+(100*roi).toFixed(1)+"%"))+'</td>'+
+      '<td class="num r">'+(o.slow||"–")+'</td></tr>'}).join("")+'</table>'):'<div class="empty">Nothing yet.</div>';
 }
 function table(rows){
-  return '<table><tr><th>time</th><th>bet</th><th class="r">stake</th><th class="r">price</th><th class="r">accepted</th><th class="hide-sm">receipt</th></tr>'+rows.map(r=>
-    '<tr><td class="num">'+hm(r.at)+'</td>'+
+  return '<table><tr><th>time</th><th>bet</th><th class="r">stake</th><th class="r">price</th><th class="r">result</th><th class="r hide-sm">accepted</th></tr>'+rows.map(r=>{
+    const res=r.result==="won"?'<span class="res w">W '+money(+r.pnl||0)+'</span>'
+      :r.result==="lost"?'<span class="res l">L '+money(+r.pnl||0)+'</span>'
+      :'<span class="res o">open</span>';
+    return '<tr><td class="num">'+hm(r.at)+'</td>'+
     '<td><div class="pick">'+esc(r.pick)+' <span class="bk">'+esc(r.agent||r.book)+'</span></div><div class="match">'+esc(r.home)+' v '+esc(r.away)+' · '+esc(r.league||"")+'</div></td>'+
     '<td class="num r">$'+f2(r.stake)+'</td><td class="num r">'+f2(r.price)+'</td>'+
-    '<td class="r">'+(r.ms!=null?'<span class="ms'+(r.slow?" slow":"")+'">'+(r.ms/1000).toFixed(1)+'s'+(r.slow?' → trader':'')+'</span>':'–')+'</td>'+
-    '<td class="receipt hide-sm">'+esc((r.receipt||"").slice(0,60))+'</td></tr>').join("")+'</table>';
+    '<td class="r">'+res+'</td>'+
+    '<td class="r hide-sm">'+(r.ms!=null?'<span class="ms'+(r.slow?" slow":"")+'">'+(r.ms/1000).toFixed(1)+'s'+(r.slow?' → trader':'')+'</span>':'–')+'</td></tr>'}).join("")+'</table>';
 }
 load();setInterval(load,60000);
 </script></body></html>
