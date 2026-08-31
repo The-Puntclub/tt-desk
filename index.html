@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TT Desk · Cloud</title>
+<style>
+:root{--bg:#0a0e13;--panel:#111722;--panel2:#0d131c;--line:#1c2634;--txt:#e4ecf4;
+--dim:#93a1b1;--faint:#5c6979;--green:#31d47d;--green-bg:#0e2719;--green-line:#1e4b32;
+--red:#ff6262;--red-bg:#2a1212;--red-line:#5a2525;--amber:#ffb648;--amber-bg:#2a2110;
+--amber-line:#5a4416;--blue:#57aaff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:14px/1.45 "Segoe UI",system-ui,sans-serif;padding:12px;max-width:760px;margin:0 auto}
+.num{font-variant-numeric:tabular-nums;font-family:Consolas,"Cascadia Mono",monospace}
+h1{font-size:1rem;letter-spacing:.05em;display:flex;align-items:center;gap:8px}
+h1 .dot{width:9px;height:9px;border-radius:50%;background:var(--faint)}
+h1 .dot.live{background:var(--green)}h1 .dot.dead{background:var(--red)}
+.sub{font-size:.7rem;color:var(--faint);margin:3px 0 10px}
+#alert{display:none;background:var(--red-bg);border:1px solid var(--red-line);color:var(--red);
+border-radius:9px;padding:10px 12px;font-weight:700;margin-bottom:10px;font-size:.85rem}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px;margin-bottom:12px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.tile .l{font-size:.64rem;letter-spacing:.07em;color:var(--faint);text-transform:uppercase;display:flex;align-items:center;gap:6px}
+.tile .l i{width:7px;height:7px;border-radius:50%;background:var(--faint);flex:none}
+.tile.ok .l i{background:var(--green)}.tile.warn .l i{background:var(--amber)}.tile.bad .l i{background:var(--red)}
+.tile .v{font-size:1.05rem;font-weight:700;margin-top:3px}
+.tile .s{font-size:.66rem;color:var(--dim);margin-top:2px;word-break:break-word}
+.sect{font-size:.68rem;letter-spacing:.08em;color:var(--faint);margin:14px 0 6px;text-transform:uppercase}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:9px;overflow:hidden;font-size:.76rem}
+th{font-size:.62rem;letter-spacing:.06em;color:var(--faint);text-transform:uppercase;text-align:left;padding:7px 8px;border-bottom:1px solid var(--line)}
+td{padding:6px 8px;border-bottom:1px solid #141c27;vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.r,th.r{text-align:right}
+.pick{font-weight:700}.match{color:var(--faint);font-size:.68rem}
+.bk{font-size:.6rem;padding:1px 5px;border-radius:4px;background:#16202c;color:var(--blue);border:1px solid #223247;white-space:nowrap}
+.ms{font-size:.62rem;padding:1px 5px;border-radius:4px;background:var(--green-bg);color:var(--green);border:1px solid var(--green-line);white-space:nowrap}
+.ms.slow{background:var(--amber-bg);color:var(--amber);border-color:var(--amber-line)}
+.tot{font-size:.72rem;color:var(--dim);margin:6px 2px}
+.tot b{color:var(--txt)}
+.empty{color:var(--faint);font-size:.76rem;padding:14px;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:9px}
+.receipt{color:var(--faint);font-size:.64rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:520px){.hide-sm{display:none}}
+</style></head><body>
+<h1><span class="dot" id="hdot"></span>TT DESK · CLOUD<span style="margin-left:auto" class="num sub" id="clock"></span></h1>
+<div class="sub" id="upd">loading…</div>
+<div id="alert"></div>
+<div class="tiles" id="tiles"></div>
+<div class="sect">today</div><div class="tot" id="today-tot"></div><div id="today"></div>
+<div class="sect">last 7 days</div><div id="week"></div>
+<script>
+const TZ="Australia/Sydney";
+// Viewer shell only — all data (and its access control) lives behind this
+// key-protected API. The ?key=... from the page URL is passed through.
+const API="https://ppqaxxvnnarzbqubopcf.supabase.co/functions/v1/desk";
+const $=q=>document.querySelector(q);
+const esc=s=>String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+const f2=o=>o==null?"–":(+o).toFixed(2);
+const hm=iso=>new Date(iso).toLocaleTimeString("en-AU",{timeZone:TZ,hour:"numeric",minute:"2-digit",hour12:true}).replace(/\s*([AP])\.?M\.?/i,(m,g)=>" "+g.toLowerCase()+"m");
+const dayKey=iso=>new Date(iso).toLocaleDateString("en-CA",{timeZone:TZ});
+const ago=s=>{if(s==null)return"never";if(s<90)return Math.round(s)+"s ago";if(s<5400)return Math.round(s/60)+"m ago";if(s<172800)return(s/3600).toFixed(1)+"h ago";return Math.round(s/86400)+"d ago"};
+function tile(cls,l,v,s){return '<div class="tile '+cls+'"><div class="l"><i></i>'+l+'</div><div class="v num">'+v+'</div><div class="s">'+s+'</div></div>'}
+async function load(){
+  let d;
+  try{const r=await fetch(API+"?api=1&key="+new URLSearchParams(location.search).get("key"),{cache:"no-store"});d=await r.json();}
+  catch(e){$("#upd").textContent="cloud unreachable — retrying…";return}
+  if(!d.ok){$("#upd").textContent="error: "+(d.error||"bad key?");return}
+  const now=new Date(d.now).getTime();
+  $("#clock").textContent=new Date().toLocaleTimeString("en-AU",{timeZone:TZ,hour:"numeric",minute:"2-digit",hour12:true})+" Sydney";
+  const st={};(d.status||[]).forEach(r=>st[r.component]=r);
+  const desk=st.desk, dAge=desk?(now-new Date(desk.seen_at).getTime())/1e3:null;
+  const deskOk=dAge!=null&&dAge<180;
+  $("#hdot").className="dot "+(deskOk?"live":"dead");
+  const al=$("#alert");
+  if(!desk){al.style.display="block";al.textContent="NO DESK HEARTBEAT EVER RECEIVED — is the dashboard's cloud relay running?";}
+  else if(!deskOk){al.style.display="block";al.textContent="DESK SILENT "+ago(dAge)+" — dashboard, laptop or its internet is down. Nothing is being scraped, scored or bet.";}
+  else al.style.display="none";
+  const t=[];
+  const dp=desk&&desk.payload||{};
+  t.push(tile(deskOk?"ok":"bad","desk",deskOk?"LIVE":"DOWN",(desk?ago(dAge):"never")+(dp.machine?" · "+esc(dp.machine):"")));
+  if(desk){
+    const cyc=dp.cycle_age_s;
+    t.push(tile(cyc==null?"warn":cyc<900?"ok":"bad","scrape cycle",cyc==null?"?":Math.round(cyc/60)+"m old",(dp.selections??"?")+" picks · "+(dp.watches??"?")+" watches"+(dp.fast_poll?" · FAST 60s":"")));
+    const models=dp.models||{};
+    Object.keys(models).forEach(k=>{const m=models[k]||{};const bad=m.blocked||m.age_h==null||m.age_h>24;
+      t.push(tile(bad?"bad":m.age_h>2?"warn":"ok",k+" model",m.age_h==null?"?":m.age_h.toFixed(1)+"h",m.blocked?"BLOCKED — EVs withheld":"ratings age"));});
+    const books=dp.books||{};
+    const badBooks=Object.keys(books).filter(b=>books[b]&&books[b].ok===false);
+    t.push(tile(badBooks.length?"bad":"ok","scrapers",badBooks.length?badBooks.join(", "):"all ok",Object.keys(books).map(b=>b+":"+((books[b]||{}).n??"?")).join(" · ")||"–"));
+  }
+  Object.keys(st).filter(k=>k.startsWith("ext:")).sort().forEach(k=>{
+    const a=st[k],p=a.payload||{},name=k.slice(4);
+    const selfAge=p.seen_at?(now/1e3-p.seen_at):null;   // the extension's own last report
+    const aAge=(now-new Date(a.seen_at).getTime())/1e3; // when the desk last relayed it
+    const age=selfAge!=null?Math.max(selfAge,0):aAge;
+    const fresh=age<300;
+    const q=(p.queue||{}).n||0,dy=p.daily||{};
+    t.push(tile(fresh?"ok":"warn","ext · "+esc(name),fresh?"ON":ago(age),
+      "queue "+q+" · today "+(dy.bets||0)+" bets $"+(dy.stake||0)+(fresh?"":" · Chrome likely closed")));
+  });
+  $("#tiles").innerHTML=t.join("");
+  const rows=d.placements||[];const tk=dayKey(d.now);
+  const today=rows.filter(r=>dayKey(r.at)===tk);
+  const stake=today.reduce((s,r)=>s+(+r.stake||0),0);
+  $("#today-tot").innerHTML=today.length?("<b>"+today.length+"</b> bet"+(today.length==1?"":"s")+" · <b>$"+stake.toFixed(2)+"</b> staked"):"";
+  $("#today").innerHTML=today.length?table(today):'<div class="empty">No bets placed today yet.</div>';
+  const byDay={};rows.forEach(r=>{const k=dayKey(r.at);(byDay[k]=byDay[k]||{n:0,s:0,slow:0}).n++;byDay[k].s+=(+r.stake||0);if(r.slow)byDay[k].slow++;});
+  const days=Object.keys(byDay).sort().reverse();
+  $("#week").innerHTML=days.length?('<table><tr><th>day</th><th class="r">bets</th><th class="r">staked</th><th class="r">→ trader</th></tr>'+
+    days.map(k=>'<tr><td class="num">'+k+'</td><td class="num r">'+byDay[k].n+'</td><td class="num r">$'+byDay[k].s.toFixed(2)+'</td><td class="num r">'+(byDay[k].slow||"–")+'</td></tr>').join("")+'</table>'):'<div class="empty">Nothing in the last 7 days.</div>';
+  $("#upd").textContent="updated "+hm(d.now)+" · auto-refreshes every 60s · times Sydney";
+}
+function table(rows){
+  return '<table><tr><th>time</th><th>bet</th><th class="r">stake</th><th class="r">price</th><th class="r">accepted</th><th class="hide-sm">receipt</th></tr>'+rows.map(r=>
+    '<tr><td class="num">'+hm(r.at)+'</td>'+
+    '<td><div class="pick">'+esc(r.pick)+' <span class="bk">'+esc(r.agent||r.book)+'</span></div><div class="match">'+esc(r.home)+' v '+esc(r.away)+' · '+esc(r.league||"")+'</div></td>'+
+    '<td class="num r">$'+f2(r.stake)+'</td><td class="num r">'+f2(r.price)+'</td>'+
+    '<td class="r">'+(r.ms!=null?'<span class="ms'+(r.slow?" slow":"")+'">'+(r.ms/1000).toFixed(1)+'s'+(r.slow?' → trader':'')+'</span>':'–')+'</td>'+
+    '<td class="receipt hide-sm">'+esc((r.receipt||"").slice(0,60))+'</td></tr>').join("")+'</table>';
+}
+load();setInterval(load,60000);
+</script></body></html>
