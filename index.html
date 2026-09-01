@@ -104,8 +104,17 @@ async function load(){
   const dp=desk&&desk.payload||{};
   t.push(tile(deskOk?"ok":"bad","desk",deskOk?"LIVE":"DOWN",(desk?ago(dAge):"never")+(dp.machine?" · "+esc(dp.machine):"")));
   if(desk){
-    const cyc=dp.cycle_age_s;
-    t.push(tile(cyc==null?"warn":cyc<900?"ok":"bad","scrape cycle",cyc==null?"?":Math.round(cyc/60)+"m old",(dp.selections??"?")+" picks · "+(dp.watches??"?")+" watches"+(dp.fast_poll?" · FAST 60s":"")));
+    // Feed age is measured from when the feed was BUILT (payload.generated),
+    // not from the desk's heartbeat — the desk beats every 60s but only
+    // rescrapes every 300s when nothing is near a betting window, and those
+    // are different facts. (It used to read cycle_age_s, which actually held
+    // the pass duration, so this tile always said "0m old".)
+    const fed=dp.generated?(now/1e3-dp.generated):null;
+    const stale=dp.fast_poll?180:420;   // hot windows rescrape every 60s
+    t.push(tile(fed==null?"warn":fed<stale?"ok":"bad","feed",
+      fed==null?"?":(fed<90?Math.round(fed)+"s old":Math.round(fed/60)+"m old"),
+      (dp.selections??"?")+" picks · "+(dp.watches??"?")+" watches"+
+      (dp.fast_poll?" · FAST 60s":" · idle 5m")));
     const models=dp.models||{};
     Object.keys(models).forEach(k=>{const m=models[k]||{};const bad=m.blocked||m.age_h==null||m.age_h>24;
       t.push(tile(bad?"bad":m.age_h>2?"warn":"ok",k+" model",m.age_h==null?"?":m.age_h.toFixed(1)+"h",m.blocked?"BLOCKED — EVs withheld":"ratings age"));});
