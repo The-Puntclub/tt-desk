@@ -25,6 +25,14 @@ border-radius:9px;padding:10px 12px;font-weight:700;margin-bottom:10px;font-size
 .tile .v{font-size:1.05rem;font-weight:700;margin-top:3px}
 .tile .v.pos{color:var(--green)}.tile .v.neg{color:var(--red)}
 .tile .s{font-size:.66rem;color:var(--dim);margin-top:2px;word-break:break-word}
+.tile.clickable{cursor:pointer}
+.tile.clickable:hover{border-color:var(--blue)}
+.tile.picked{border-color:var(--blue);background:#101c2c}
+.tile.picked .l{color:var(--blue)}
+#pnlwho{color:var(--txt);text-transform:none;letter-spacing:0}
+#pnlwho b{color:var(--blue)}
+#pnlwho a{color:var(--faint);text-decoration:none;font-size:.62rem;margin-left:6px}
+#pnlwho a:hover{color:var(--red)}
 .sect{font-size:.68rem;letter-spacing:.08em;color:var(--faint);margin:14px 0 6px;text-transform:uppercase;display:flex;align-items:center;gap:10px}
 .periods{display:flex;gap:4px;margin-left:auto}
 .periods button{font:inherit;font-size:.68rem;cursor:pointer;background:var(--panel2);color:var(--dim);
@@ -56,7 +64,7 @@ td.pos{color:var(--green)}td.neg{color:var(--red)}
 <div id="alert"></div>
 <div class="tiles" id="tiles"></div>
 
-<div class="sect">p&amp;l — extension bets
+<div class="sect">p&amp;l — <span id="pnlwho">whole fleet</span>
   <span class="periods" id="periods">
     <button data-p="day">today</button><button data-p="week" class="on">7d</button>
     <button data-p="month">30d</button><button data-p="all">all</button>
@@ -78,11 +86,35 @@ const money=v=>(v<0?"−$":"$")+Math.abs(v).toFixed(2);
 const hm=iso=>new Date(iso).toLocaleTimeString("en-AU",{timeZone:TZ,hour:"numeric",minute:"2-digit",hour12:true}).replace(/\s*([AP])\.?M\.?/i,(m,g)=>" "+g.toLowerCase()+"m");
 const dayKey=iso=>new Date(iso).toLocaleDateString("en-CA",{timeZone:TZ});
 const ago=s=>{if(s==null)return"never";if(s<90)return Math.round(s)+"s ago";if(s<5400)return Math.round(s/60)+"m ago";if(s<172800)return(s/3600).toFixed(1)+"h ago";return Math.round(s/86400)+"d ago"};
-function tile(cls,l,v,s,vc){return '<div class="tile '+cls+'"><div class="l"><i></i>'+l+'</div><div class="v num '+(vc||"")+'">'+v+'</div><div class="s">'+s+'</div></div>'}
-let DATA=null, PERIOD="week";
-document.addEventListener("click",e=>{const b=e.target.closest(".periods button[data-p]");if(!b)return;
-  PERIOD=b.dataset.p;document.querySelectorAll(".periods button[data-p]").forEach(x=>x.classList.toggle("on",x===b));
-  if(DATA)renderPnl(DATA);});
+function tile(cls,l,v,s,vc,agent){
+  const sel=agent&&agent===AGENT;
+  return '<div class="tile '+cls+(agent?' clickable':'')+(sel?' picked':'')+'"'+
+    (agent?' data-agent="'+esc(agent)+'" title="show only this session\'s bets"':'')+
+    '><div class="l"><i></i>'+l+'</div><div class="v num '+(vc||"")+'">'+v+'</div>'+
+    '<div class="s">'+s+'</div></div>';
+}
+// per-machine betting results: every placement carries the agent that placed it
+function statsFor(rows,agent){
+  const mine=agent?rows.filter(r=>(r.agent||"")===agent):rows;
+  const settled=mine.filter(r=>r.result==="won"||r.result==="lost");
+  const staked=settled.reduce((s,r)=>s+(+r.stake||0),0);
+  const pnl=settled.reduce((s,r)=>s+(+r.pnl||0),0);
+  return {n:mine.length, settled:settled.length, staked, pnl,
+          wins:settled.filter(r=>r.result==="won").length,
+          roi:staked?pnl/staked:null,
+          open:mine.filter(r=>!r.result).length};
+}
+let DATA=null, PERIOD="week", AGENT=null;   // AGENT=null -> the whole fleet
+document.addEventListener("click",e=>{
+  const b=e.target.closest(".periods button[data-p]");
+  if(b){PERIOD=b.dataset.p;
+    document.querySelectorAll(".periods button[data-p]").forEach(x=>x.classList.toggle("on",x===b));
+    if(DATA){renderPnl(DATA);renderTables(DATA)} return;}
+  // clicking a session tile scopes every number below to that machine
+  const tl=e.target.closest(".tile.clickable[data-agent]");
+  if(tl){AGENT=(AGENT===tl.dataset.agent)?null:tl.dataset.agent; if(DATA)render(DATA); return;}
+  if(e.target.closest("#clearfilter")){e.preventDefault();AGENT=null; if(DATA)render(DATA);}
+});
 
 async function load(){
   let d;
@@ -90,6 +122,12 @@ async function load(){
   catch(e){$("#upd").textContent="cloud unreachable — retrying…";return}
   if(!d.ok){$("#upd").textContent="error: "+(d.error||"bad key?");return}
   DATA=d;
+  render(d);
+}
+
+// Split out so clicking a session re-renders instantly from cached data
+// instead of waiting on (or hammering) the API.
+function render(d){
   const now=new Date(d.now).getTime();
   $("#clock").textContent=new Date().toLocaleTimeString("en-AU",{timeZone:TZ,hour:"numeric",minute:"2-digit",hour12:true})+" Sydney";
   const st={};(d.status||[]).forEach(r=>st[r.component]=r);
@@ -122,16 +160,35 @@ async function load(){
     const badBooks=Object.keys(books).filter(b=>books[b]&&books[b].ok===false);
     t.push(tile(badBooks.length?"bad":"ok","scrapers",badBooks.length?badBooks.join(", "):"all ok",Object.keys(books).map(b=>b+":"+((books[b]||{}).n??"?")).join(" · ")||"–"));
   }
-  Object.keys(st).filter(k=>k.startsWith("ext:")).sort().forEach(k=>{
-    const a=st[k],p=a.payload||{},name=k.slice(4);
+  // One tile per machine — live sessions AND any machine that has bets on
+  // record but is no longer running, so no history is hidden. Click to see
+  // that session's own results.
+  const live={};
+  Object.keys(st).filter(k=>k.startsWith("ext:")).forEach(k=>{live[k.slice(4)]=st[k]});
+  const everBet={};
+  (d.placements||[]).forEach(r=>{if(r.agent)everBet[r.agent]=1});
+  const machines=[...new Set([...Object.keys(live),...Object.keys(everBet)])].sort();
+  machines.forEach(name=>{
+    const a=live[name], p=(a&&a.payload)||{};
+    const s=statsFor(d.placements||[],name);
+    const pl=s.settled?(" · "+(s.pnl>=0?"+":"")+money(s.pnl).replace("−","-")+
+             (s.roi==null?"":" ("+(s.roi>=0?"+":"")+(100*s.roi).toFixed(0)+"%)")):"";
+    if(!a){   // offline: no live session, but its bets are still on the books
+      t.push(tile("","ext · "+esc(name),"OFFLINE",
+        s.n+" bet"+(s.n===1?"":"s")+" on record"+pl,"",name));
+      return;
+    }
     const selfAge=p.seen_at?(now/1e3-p.seen_at):null;
     const aAge=(now-new Date(a.seen_at).getTime())/1e3;
     const age=selfAge!=null?Math.max(selfAge,0):aAge;
     const fresh=age<300;
     const q=(p.queue||{}).n||0,dy=p.daily||{};
     const auto=p.autoSubmit?" · AutoTT ON":"";
-    t.push(tile(fresh?(p.autoSubmit?"warn":"ok"):"warn","ext · "+esc(name),(fresh?"ON":ago(age))+auto,
-      "queue "+q+" · today "+(dy.bets||0)+" bets $"+(dy.stake||0)+(fresh?"":" · Chrome likely closed")));
+    t.push(tile(fresh?(p.autoSubmit?"warn":"ok"):"warn","ext · "+esc(name),
+      (fresh?"ON":ago(age))+auto,
+      "queue "+q+" · today "+(dy.bets||0)+" bets $"+(dy.stake||0)+
+      (fresh?"":" · Chrome likely closed")+
+      "<br>"+s.n+" bet"+(s.n===1?"":"s")+" all-time"+pl,"",name));
   });
   $("#tiles").innerHTML=t.join("");
   renderPnl(d);
@@ -146,9 +203,15 @@ function periodStart(p,nowIso){
   const days=p==="week"?7:30;
   return now.getTime()-days*864e5;
 }
+function scoped(d){
+  return AGENT?(d.placements||[]).filter(r=>(r.agent||"")===AGENT):(d.placements||[]);
+}
 function renderPnl(d){
   const from=periodStart(PERIOD,d.now);
-  const rows=(d.placements||[]).filter(r=>new Date(r.at).getTime()>=from);
+  const rows=scoped(d).filter(r=>new Date(r.at).getTime()>=from);
+  $("#pnlwho").innerHTML=AGENT
+    ? 'session <b>'+esc(AGENT)+'</b> <a id="clearfilter" href="#" title="show the whole fleet">show all ✕</a>'
+    : 'whole fleet';
   const settled=rows.filter(r=>r.result==="won"||r.result==="lost").sort((a,b)=>new Date(a.at)-new Date(b.at));
   const open=rows.filter(r=>!r.result);
   const staked=settled.reduce((s,r)=>s+(+r.stake||0),0);
@@ -184,7 +247,7 @@ function renderPnl(d){
     '<text x="'+P+'" y="'+(H-8)+'" fill="#5c6979" font-size="10">'+settled.length+' settled bets, oldest → newest</text>';
 }
 function renderTables(d){
-  const rows=d.placements||[];const tk=dayKey(d.now);
+  const rows=scoped(d);const tk=dayKey(d.now);
   const today=rows.filter(r=>dayKey(r.at)===tk);
   const stake=today.reduce((s,r)=>s+(+r.stake||0),0);
   $("#today-tot").innerHTML=today.length?("today: <b>"+today.length+"</b> bet"+(today.length==1?"":"s")+" · <b>$"+stake.toFixed(2)+"</b> staked"):"";
