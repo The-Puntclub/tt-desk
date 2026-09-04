@@ -57,6 +57,10 @@ td.pos{color:var(--green)}td.neg{color:var(--red)}
 .tot b{color:var(--txt)}
 .empty{color:var(--faint);font-size:.76rem;padding:14px;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:9px}
 .receipt{color:var(--faint);font-size:.64rem;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* A phone is narrower than these tables. Let each table scroll inside its own
+   box; without this the whole PAGE scrolls sideways and the left column
+   (time, and the pick itself) slides off the screen. */
+#today,#week{overflow-x:auto;-webkit-overflow-scrolling:touch}
 @media (max-width:520px){.hide-sm{display:none}}
 </style></head><body>
 <h1><span class="dot" id="hdot"></span>TT DESK · CLOUD<span style="margin-left:auto" class="num sub" id="clock"></span></h1>
@@ -116,9 +120,23 @@ document.addEventListener("click",e=>{
   if(e.target.closest("#clearfilter")){e.preventDefault();AGENT=null; if(DATA)render(DATA);}
 });
 
+// The read key rides in the bookmark's query string. Remember the last one that
+// worked, so a bookmark that lost its "?key=…" — retyped from memory, shared as
+// a bare link, reopened from a home-screen shortcut — still opens the desk
+// instead of showing an empty page. Same origin, same browser only.
+const KEYSTORE="ttdesk.key";
+function apiKey(){
+  const q=new URLSearchParams(location.search).get("key");
+  if(q){try{localStorage.setItem(KEYSTORE,q)}catch(e){}return q}
+  try{return localStorage.getItem(KEYSTORE)||""}catch(e){return ""}
+}
+
 async function load(){
+  const key=apiKey();
+  if(!key){$("#upd").innerHTML='this link has no key \u2014 open the desk with the bookmarked '+
+    '<b>\u2026/tt-desk/?key=\u2026</b> URL (the hub redirects you there if you hit it with your key)';return}
   let d;
-  try{const r=await fetch(API+"?api=1&key="+new URLSearchParams(location.search).get("key"),{cache:"no-store"});d=await r.json();}
+  try{const r=await fetch(API+"?api=1&key="+encodeURIComponent(key),{cache:"no-store"});d=await r.json();}
   catch(e){$("#upd").textContent="cloud unreachable — retrying…";return}
   if(!d.ok){$("#upd").textContent="error: "+(d.error||"bad key?");return}
   DATA=d;
